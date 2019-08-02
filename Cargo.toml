@@ -11,7 +11,8 @@ crate-type = ["dylib"]
 
 [dependencies]
 chrono = "0.4"
-tantivy = { git = "https://github.com/tantivy-search/tantivy" }
+#tantivy = { git = "https://github.com/tantivy-search/tantivy" }
+tantivy = {path="/home/paul/git/tantivy"}
 
 [dependencies.pyo3]
 version = "0.7.0"

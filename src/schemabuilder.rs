@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 
 use tantivy::schema;
 
-use crate::field::Field;
 use crate::schema::Schema;
 
 /// Tantivy has a very strict schema.
@@ -68,9 +67,8 @@ impl SchemaBuilder {
         stored: bool,
         tokenizer_name: &str,
         index_option: &str,
-    ) -> PyResult<Field> {
+    ) -> PyResult<()> {
         let builder = &mut self.builder;
-
         let index_option = match index_option {
             "position" => schema::IndexRecordOption::WithFreqsAndPositions,
             "freq" => schema::IndexRecordOption::WithFreqs,
@@ -93,8 +91,8 @@ impl SchemaBuilder {
         };
 
         if let Some(builder) = builder {
-            let field = builder.add_text_field(name, options);
-            Ok(Field { inner: field })
+            builder.add_text_field(name, options);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",
@@ -129,14 +127,14 @@ impl SchemaBuilder {
         stored: bool,
         indexed: bool,
         fast: Option<&str>,
-    ) -> PyResult<Field> {
+    ) -> PyResult<()> {
         let builder = &mut self.builder;
 
         let opts = SchemaBuilder::build_int_option(stored, indexed, fast)?;
 
         if let Some(builder) = builder {
-            let field = builder.add_i64_field(name, opts);
-            Ok(Field { inner: field })
+            builder.add_i64_field(name, opts);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",
@@ -171,14 +169,14 @@ impl SchemaBuilder {
         stored: bool,
         indexed: bool,
         fast: Option<&str>,
-    ) -> PyResult<Field> {
+    ) -> PyResult<()> {
         let builder = &mut self.builder;
 
         let opts = SchemaBuilder::build_int_option(stored, indexed, fast)?;
 
         if let Some(builder) = builder {
-            let field = builder.add_u64_field(name, opts);
-            Ok(Field { inner: field })
+            builder.add_u64_field(name, opts);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",
@@ -213,14 +211,14 @@ impl SchemaBuilder {
         stored: bool,
         indexed: bool,
         fast: Option<&str>,
-    ) -> PyResult<Field> {
+    ) -> PyResult<()> {
         let builder = &mut self.builder;
 
         let opts = SchemaBuilder::build_int_option(stored, indexed, fast)?;
 
         if let Some(builder) = builder {
-            let field = builder.add_date_field(name, opts);
-            Ok(Field { inner: field })
+            builder.add_date_field(name, opts);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",
@@ -231,12 +229,12 @@ impl SchemaBuilder {
     /// Add a Facet field to the schema.
     /// Args:
     ///     name (str): The name of the field.
-    fn add_facet_field(&mut self, name: &str) -> PyResult<Field> {
+    fn add_facet_field(&mut self, name: &str) -> PyResult<()> {
         let builder = &mut self.builder;
 
         if let Some(builder) = builder {
-            let field = builder.add_facet_field(name);
-            Ok(Field { inner: field })
+            builder.add_facet_field(name);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",
@@ -252,12 +250,12 @@ impl SchemaBuilder {
     ///
     /// Args:
     ///     name (str): The name of the field.
-    fn add_bytes_field(&mut self, name: &str) -> PyResult<Field> {
+    fn add_bytes_field(&mut self, name: &str) -> PyResult<()> {
         let builder = &mut self.builder;
 
         if let Some(builder) = builder {
-            let field = builder.add_bytes_field(name);
-            Ok(Field { inner: field })
+            builder.add_bytes_field(name);
+            Ok(())
         } else {
             Err(exceptions::ValueError::py_err(
                 "Schema builder object isn't valid anymore.",

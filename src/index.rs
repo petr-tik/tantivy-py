@@ -1,53 +1,16 @@
 use pyo3::exceptions;
 use pyo3::prelude::*;
 
-use crate::document::Document;
 use crate::schema::Schema;
 use crate::searcher::Searcher;
+use crate::to_pyerr;
+use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
+use std::collections::BTreeMap;
 use tantivy as tv;
 use tantivy::directory::MmapDirectory;
+use tantivy::schema::{NamedFieldDocument, Value};
 
 const RELOAD_POLICY: &str = "commit";
-
-/// IndexReader is the entry point to read and search the index.
-///
-/// IndexReader controls when a new version of the index should be loaded and
-/// lends you instances of Searcher for the last loaded version.
-///
-/// To create an IndexReader first create an Index and call the reader() method
-/// on the index object.
-#[pyclass]
-pub(crate) struct IndexReader {
-    inner: tv::IndexReader,
-}
-
-#[pymethods]
-impl IndexReader {
-    /// Update searchers so that they reflect the state of the last .commit().
-    ///
-    /// If you set up the the reload policy to be on 'commit' (which is the
-    /// default) every commit should be rapidly reflected on your IndexReader
-    /// and you should not need to call reload() at all.
-    fn reload(&self) -> PyResult<()> {
-        let ret = self.inner.reload();
-        match ret {
-            Ok(_) => Ok(()),
-            Err(e) => Err(exceptions::ValueError::py_err(e.to_string())),
-        }
-    }
-
-    /// Get a Searcher for the index.
-    ///
-    /// This method should be called every single time a search query is
-    /// performed. The searchers are taken from a pool of num_searchers
-    /// searchers.
-    ///
-    /// Returns a Searcher object, if no searcher is available this may block.
-    fn searcher(&self) -> Searcher {
-        let searcher = self.inner.searcher();
-        Searcher { inner: searcher }
-    }
-}
 
 /// IndexWriter is the user entry-point to add documents to the index.
 ///
@@ -56,6 +19,21 @@ impl IndexReader {
 #[pyclass]
 pub(crate) struct IndexWriter {
     inner: tv::IndexWriter,
+}
+
+fn extract_value(any: &PyAny) -> PyResult<Value> {
+    if let Ok(s) = any.extract::<String>() {
+        return Ok(Value::Str(s));
+    }
+    Ok(Value::U64(0u64))
+}
+
+fn extract_value_single_or_list(any: &PyAny) -> PyResult<Vec<Value>> {
+    if let Ok(values) = any.downcast_ref::<PyList>() {
+        values.iter().map(extract_value).collect()
+    } else {
+        Ok(vec![extract_value(any)?])
+    }
 }
 
 #[pymethods]
@@ -68,8 +46,27 @@ impl IndexWriter {
     /// by the client to align commits with its own document queue.
     /// The `opstamp` represents the number of documents that have been added
     /// since the creation of the index.
-    fn add_document(&mut self, document: &Document) -> PyResult<()> {
-        self.inner.add_document(document.inner.clone());
+    pub fn add_document(&mut self, py_dict: &PyDict) -> PyResult<()> {
+        let mut fields: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for key_value_any in py_dict.items() {
+            if let Ok(key_value) = key_value_any.downcast_ref::<PyTuple>() {
+                if key_value.len() != 2 {
+                    continue;
+                }
+                let key: String = key_value.get_item(0).extract()?;
+                let value_list =
+                    extract_value_single_or_list(key_value.get_item(1))?;
+                fields.insert(key, value_list);
+            }
+        }
+        self.inner
+            .add_named_document(NamedFieldDocument(fields))
+            .map_err(to_pyerr)?;
+        Ok(())
+    }
+
+    pub fn add_json(&mut self, json: &str) -> PyResult<()> {
+        self.inner.add_json(json).map_err(to_pyerr)?;
         Ok(())
     }
 
@@ -140,11 +137,19 @@ impl IndexWriter {
 /// if there was a problem during the opening or creation of the index.
 #[pyclass]
 pub(crate) struct Index {
-    pub(crate) inner: tv::Index,
+    pub(crate) index: tv::Index,
+    reader: tv::IndexReader,
 }
 
 #[pymethods]
 impl Index {
+    #[staticmethod]
+    fn open(path: &str) -> PyResult<Index> {
+        let index = tv::Index::open_in_dir(path).map_err(to_pyerr)?;
+        let reader = index.reader().map_err(to_pyerr)?;
+        Ok(Index { index, reader })
+    }
+
     #[new]
     #[args(reuse = true)]
     fn new(
@@ -180,7 +185,8 @@ impl Index {
             None => tv::Index::create_in_ram(schema.inner.clone()),
         };
 
-        obj.init(Index { inner: index });
+        let reader = index.reader().map_err(to_pyerr)?;
+        obj.init(Index { index, reader });
         Ok(())
     }
 
@@ -204,8 +210,8 @@ impl Index {
         num_threads: usize,
     ) -> PyResult<IndexWriter> {
         let writer = match num_threads {
-            0 => self.inner.writer(heap_size),
-            _ => self.inner.writer_with_num_threads(num_threads, heap_size),
+            0 => self.index.writer(heap_size),
+            _ => self.index.writer_with_num_threads(num_threads, heap_size),
         };
 
         match writer {
@@ -214,22 +220,20 @@ impl Index {
         }
     }
 
-    /// Create an IndexReader for the index.
-    ///
-    /// Args:
-    ///     reload_policy (str, optional): The reload policy that the
-    ///         IndexReader should use. Can be manual or OnCommit.
-    ///     num_searchers (int, optional): The number of searchers that the
-    ///         reader should create.
-    ///
-    /// Returns the IndexReader on success, raises ValueError if a IndexReader
-    /// couldn't be created.
+    // Configure the way .
+    //
+    // Args:
+    //     reload_policy (str, optional): The reload policy that the
+    //         IndexReader should use. Can be manual or OnCommit.
+    //     num_searchers (int, optional): The number of searchers that the
+    //         reader should create.
+    // TODO update doc
     #[args(reload_policy = "RELOAD_POLICY", num_searchers = 0)]
-    fn reader(
-        &self,
+    fn config_reader(
+        &mut self,
         reload_policy: &str,
         num_searchers: usize,
-    ) -> PyResult<IndexReader> {
+    ) -> Result<(), PyErr> {
         let reload_policy = reload_policy.to_lowercase();
         let reload_policy = match reload_policy.as_ref() {
             "commit" => tv::ReloadPolicy::OnCommit,
@@ -240,9 +244,7 @@ impl Index {
                 "Invalid reload policy, valid choices are: 'manual' and 'OnCommit'"
             ))
         };
-
-        let builder = self.inner.reader_builder();
-
+        let builder = self.index.reader_builder();
         let builder = builder.reload_policy(reload_policy);
         let builder = if num_searchers > 0 {
             builder.num_searchers(num_searchers)
@@ -250,10 +252,13 @@ impl Index {
             builder
         };
 
-        let reader = builder.try_into();
-        match reader {
-            Ok(r) => Ok(IndexReader { inner: r }),
-            Err(e) => Err(exceptions::ValueError::py_err(e.to_string())),
+        self.reader = builder.try_into().map_err(to_pyerr)?;
+        Ok(())
+    }
+
+    fn searcher(&self) -> Searcher {
+        Searcher {
+            inner: self.reader.searcher(),
         }
     }
 
@@ -271,14 +276,22 @@ impl Index {
             Ok(d) => d,
             Err(e) => return Err(exceptions::OSError::py_err(e.to_string())),
         };
-
         Ok(tv::Index::exists(&dir))
     }
 
     /// The schema of the current index.
     #[getter]
     fn schema(&self) -> Schema {
-        let schema = self.inner.schema();
+        let schema = self.index.schema();
         Schema { inner: schema }
+    }
+
+    /// Update searchers so that they reflect the state of the last .commit().
+    ///
+    /// If you set up the the reload policy to be on 'commit' (which is the
+    /// default) every commit should be rapidly reflected on your IndexReader
+    /// and you should not need to call reload() at all.
+    fn reload(&self) -> PyResult<()> {
+        self.reader.reload().map_err(to_pyerr)
     }
 }

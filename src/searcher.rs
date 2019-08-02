@@ -1,10 +1,13 @@
+use crate::facet::Facet;
+use crate::query::Query;
+use crate::to_pyerr;
 use pyo3::exceptions;
 use pyo3::prelude::*;
-
+use pyo3::types::{PyDateTime, PyDict};
+use std::collections::BTreeMap;
 use tantivy as tv;
-
-use crate::document::Document;
-use crate::query::Query;
+use tantivy::schema;
+use tantivy::schema::Value;
 
 /// Tantivy's Searcher class
 ///
@@ -59,15 +62,48 @@ impl Searcher {
     ///         the document that we wish to fetch.
     ///
     /// Returns the Document, raises ValueError if the document can't be found.
-    fn doc(&self, doc_address: &DocAddress) -> PyResult<Document> {
-        let ret = self.inner.doc(doc_address.into());
-        match ret {
-            Ok(doc) => Ok(Document { inner: doc }),
-            Err(e) => Err(exceptions::ValueError::py_err(e.to_string())),
+    fn doc(&self, doc_address: &DocAddress) -> PyResult<WrappedDoc> {
+        let doc = self.inner.doc(doc_address.into()).map_err(to_pyerr)?;
+        let named_doc = self.inner.schema().to_named_doc(&doc);
+        Ok(WrappedDoc(named_doc.0))
+    }
+}
+
+struct WrappedDoc(BTreeMap<String, Vec<Value>>);
+
+fn value_to_py(
+    py: Python,
+    value: tv::schema::Value,
+) -> Result<PyObject, PyErr> {
+    match value {
+        tv::schema::Value::Str(text) => Ok(text.into_object(py)),
+        tv::schema::Value::U64(num) => Ok(num.into_object(py)),
+        tv::schema::Value::I64(num) => Ok(num.into_object(py)),
+        tv::schema::Value::F64(num) => Ok(num.into_object(py)),
+        tv::schema::Value::Bytes(b) => Ok(b.to_object(py)),
+        tv::schema::Value::Date(d) => {
+            Ok(PyDateTime::from_timestamp(py, d.timestamp() as f64, None)?
+                .into())
+        }
+        schema::Value::Facet(f) => {
+            Ok(Facet { inner: f.clone() }.into_object(py))
         }
     }
 }
 
+impl IntoPyObject for WrappedDoc {
+    fn into_object(self, py: Python) -> PyObject {
+        let dict = PyDict::new(py);
+        for (key, values) in self.0 {
+            let values_py: Vec<PyObject> = values
+                .into_iter()
+                .map(|v| value_to_py(py, v).unwrap())
+                .collect();
+            dict.set_item(key, values_py).unwrap();
+        }
+        dict.into()
+    }
+}
 /// DocAddress contains all the necessary information to identify a document
 /// given a Searcher object.
 ///

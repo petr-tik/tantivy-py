@@ -1,17 +1,14 @@
+use pyo3::exceptions;
 use pyo3::prelude::*;
 
-mod document;
 mod facet;
-mod field;
 mod index;
 mod query;
 mod schema;
 mod schemabuilder;
 mod searcher;
 
-use document::Document;
 use facet::Facet;
-use field::{Field, FieldValue};
 use index::Index;
 use query::QueryParser;
 use schema::Schema;
@@ -77,12 +74,12 @@ fn tantivy(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Searcher>()?;
     m.add_class::<Index>()?;
     m.add_class::<QueryParser>()?;
-    m.add_class::<Document>()?;
     m.add_class::<DocAddress>()?;
     m.add_class::<TopDocs>()?;
-    m.add_class::<Field>()?;
-    m.add_class::<FieldValue>()?;
     m.add_class::<Facet>()?;
-
     Ok(())
+}
+
+pub(crate) fn to_pyerr<E: ToString>(err: E) -> PyErr {
+    exceptions::ValueError::py_err(err.to_string())
 }

@@ -4,7 +4,7 @@ use pyo3::types::PyType;
 
 use tantivy as tv;
 
-use crate::field::Field;
+// use crate::field::Field;
 use crate::index::Index;
 
 /// Tantivy's Query
@@ -33,13 +33,23 @@ impl QueryParser {
     fn for_index(
         _cls: &PyType,
         index: &Index,
-        default_fields: Vec<&Field>,
+        default_field_names: Vec<String>,
     ) -> PyResult<QueryParser> {
-        let default_fields: Vec<tv::schema::Field> =
-            default_fields.iter().map(|&f| f.inner.clone()).collect();
-
+        let mut default_fields: Vec<tv::schema::Field> = Vec::new();
+        for default_field_name in &default_field_names {
+            if let Some(field) =
+                index.index.schema().get_field(default_field_name)
+            {
+                default_fields.push(field);
+            } else {
+                return Err(exceptions::ValueError::py_err(format!(
+                    "Field `{}` is not defined in the schema.",
+                    default_field_name
+                )));
+            }
+        }
         let parser =
-            tv::query::QueryParser::for_index(&index.inner, default_fields);
+            tv::query::QueryParser::for_index(&index.index, default_fields);
         Ok(QueryParser { inner: parser })
     }
 
